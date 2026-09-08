@@ -462,7 +462,7 @@ func (c *Client) ForkAgentInstance(ctx context.Context, checkpointID, userID, re
 		headID := string(ids.task(a2a.TaskID(checkpoint.HeadTaskID)))
 		if err := q.SetAgentInstanceTaskSnapshot(ctx, dbgen.SetAgentInstanceTaskSnapshotParams{
 			ContextID: instanceUUID, ID: headID, SnapshotAtespace: &checkpoint.SnapshotAtespace,
-			SnapshotName: &checkpoint.SnapshotName, SnapshotUid: &checkpoint.SnapshotUid,
+			SnapshotUri:          &checkpoint.SnapshotUri,
 			SnapshotContentScope: &checkpoint.SnapshotContentScope, HistorySequence: &copiedHistorySequence,
 		}); err != nil {
 			return fmt.Errorf("store fork history boundary: %w", err)
@@ -1031,7 +1031,7 @@ func (c *Client) StoreAgentInstanceTaskEvent(ctx context.Context, instanceID str
 			}
 			if err := q.SetAgentInstanceTaskSnapshot(ctx, dbgen.SetAgentInstanceTaskSnapshotParams{
 				ContextID: contextID, ID: string(task.ID), SnapshotAtespace: &snapshot.Atespace,
-				SnapshotName: &snapshot.Name, SnapshotUid: &snapshot.UID,
+				SnapshotUri:          &snapshot.URI,
 				SnapshotContentScope: &snapshot.ContentScope, HistorySequence: &sequence,
 			}); err != nil {
 				return fmt.Errorf("store AgentInstance task snapshot: %w", err)
@@ -1129,7 +1129,7 @@ func (c *Client) ReserveAgentInstanceCheckpoint(ctx context.Context, checkpoint 
 		if err != nil {
 			return fmt.Errorf("get latest AgentInstance task boundary: %w", err)
 		}
-		if boundary.SnapshotAtespace == nil || boundary.SnapshotName == nil || boundary.SnapshotUid == nil ||
+		if boundary.SnapshotAtespace == nil || boundary.SnapshotUri == nil ||
 			boundary.SnapshotContentScope == nil || boundary.HistorySequence == nil {
 			return ErrAgentInstanceNotQuiescent
 		}
@@ -1148,7 +1148,7 @@ func (c *Client) ReserveAgentInstanceCheckpoint(ctx context.Context, checkpoint 
 			ID: uuid.MustParse(checkpoint.GetId()), SourceInstanceID: uuid.MustParse(checkpoint.GetAgentInstanceId()),
 			UserID: userID, RequestID: requestID, HeadTaskID: boundary.ID,
 			HistorySequence: *boundary.HistorySequence, SnapshotAtespace: *boundary.SnapshotAtespace,
-			SnapshotName: *boundary.SnapshotName, SnapshotUid: *boundary.SnapshotUid,
+			SnapshotUri:          *boundary.SnapshotUri,
 			SnapshotContentScope: *boundary.SnapshotContentScope,
 			SourceContextID:      instance.ContextID, PreparedRevision: instance.PreparedRevision,
 			SourceLabels: instance.Labels, Data: data,
@@ -1183,9 +1183,9 @@ func (c *Client) ReserveAgentInstanceCheckpoint(ctx context.Context, checkpoint 
 	return result, snapshot, nil
 }
 
-func (c *Client) FinalizeAgentInstanceCheckpoint(ctx context.Context, id, tagUID, failure string) (*apiv1alpha1.Checkpoint, error) {
-	if (tagUID == "") == (failure == "") {
-		return nil, fmt.Errorf("finalize AgentInstance checkpoint requires exactly one of tag UID or failure")
+func (c *Client) FinalizeAgentInstanceCheckpoint(ctx context.Context, id, tagUID, snapshotURI, failure string) (*apiv1alpha1.Checkpoint, error) {
+	if (tagUID == "") == (failure == "") || (tagUID == "") != (snapshotURI == "") {
+		return nil, fmt.Errorf("finalize AgentInstance checkpoint requires tag UID and snapshot URI, or failure")
 	}
 	var result *apiv1alpha1.Checkpoint
 	err := c.withTx(ctx, func(q *dbgen.Queries) error {
@@ -1198,7 +1198,7 @@ func (c *Client) FinalizeAgentInstanceCheckpoint(ctx context.Context, id, tagUID
 			return err
 		}
 		if row.State != "CREATING" {
-			if (row.State == "READY" && row.TagUid == tagUID && failure == "") ||
+			if (row.State == "READY" && row.TagUid == tagUID && row.SnapshotUri == snapshotURI && failure == "") ||
 				(row.State == "FAILED" && tagUID == "" && result.GetFailure().GetMessage() == failure) {
 				return nil
 			}
@@ -1213,7 +1213,7 @@ func (c *Client) FinalizeAgentInstanceCheckpoint(ctx context.Context, id, tagUID
 		if err != nil {
 			return fmt.Errorf("encode checkpoint: %w", err)
 		}
-		row, err = q.FinalizeAgentInstanceCheckpoint(ctx, dbgen.FinalizeAgentInstanceCheckpointParams{ID: row.ID, TagUid: tagUID, Data: data})
+		row, err = q.FinalizeAgentInstanceCheckpoint(ctx, dbgen.FinalizeAgentInstanceCheckpointParams{ID: row.ID, TagUid: tagUID, SnapshotUri: snapshotURI, Data: data})
 		if err != nil {
 			return notFoundOr(err)
 		}
@@ -1235,7 +1235,8 @@ func (c *Client) GetAgentInstanceCheckpoint(ctx context.Context, id, userID stri
 }
 
 // GetAgentInstanceCheckpointSnapshot returns the private snapshot reference and
-// tag UID for lifecycle workflows. Snapshot references are immutable after reservation.
+// tag UID for lifecycle workflows. Finalization replaces the source URI with the
+// retained Tag copy; ready references are immutable.
 func (c *Client) GetAgentInstanceCheckpointSnapshot(ctx context.Context, id, userID string) (*AgentInstanceTaskSnapshot, string, error) {
 	row, err := c.q.GetAgentInstanceCheckpointSnapshot(ctx, dbgen.GetAgentInstanceCheckpointSnapshotParams{ID: uuid.MustParse(id), UserID: userID})
 	if err != nil {
@@ -1249,7 +1250,7 @@ func (c *Client) GetAgentInstanceCheckpointSnapshot(ctx context.Context, id, use
 
 func checkpointSnapshot(row dbgen.AgentInstanceCheckpoint) *AgentInstanceTaskSnapshot {
 	return &AgentInstanceTaskSnapshot{
-		Atespace: row.SnapshotAtespace, Name: row.SnapshotName, UID: row.SnapshotUid, ContentScope: row.SnapshotContentScope,
+		Atespace: row.SnapshotAtespace, URI: row.SnapshotUri, ContentScope: row.SnapshotContentScope,
 	}
 }
 
