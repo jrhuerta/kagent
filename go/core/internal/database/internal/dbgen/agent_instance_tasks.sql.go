@@ -107,6 +107,43 @@ func (q *Queries) GetActiveAgentInstanceTask(ctx context.Context, contextID uuid
 	return i, err
 }
 
+const getActiveAgentInstanceTaskForUpdate = `-- name: GetActiveAgentInstanceTaskForUpdate :one
+SELECT context_id, id, state, status_timestamp, data, created_at, updated_at, initial_message_id, request_hash, snapshot_atespace, snapshot_uri, snapshot_content_scope, history_sequence FROM agent_instance_task
+WHERE context_id = $1
+  AND state NOT IN (
+      'TASK_STATE_COMPLETED',
+      'TASK_STATE_CANCELED',
+      'TASK_STATE_FAILED',
+      'TASK_STATE_REJECTED',
+      'TASK_STATE_INPUT_REQUIRED',
+      'TASK_STATE_AUTH_REQUIRED'
+  )
+FOR UPDATE
+`
+
+// GetActiveAgentInstanceTaskForUpdate holds the instance's non-terminal task for the
+// rest of the transaction so reclamation cannot overwrite concurrent progress.
+func (q *Queries) GetActiveAgentInstanceTaskForUpdate(ctx context.Context, contextID uuid.UUID) (AgentInstanceTask, error) {
+	row := q.db.QueryRow(ctx, getActiveAgentInstanceTaskForUpdate, contextID)
+	var i AgentInstanceTask
+	err := row.Scan(
+		&i.ContextID,
+		&i.ID,
+		&i.State,
+		&i.StatusTimestamp,
+		&i.Data,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.InitialMessageID,
+		&i.RequestHash,
+		&i.SnapshotAtespace,
+		&i.SnapshotUri,
+		&i.SnapshotContentScope,
+		&i.HistorySequence,
+	)
+	return i, err
+}
+
 const getAgentInstanceTask = `-- name: GetAgentInstanceTask :one
 SELECT context_id, id, state, status_timestamp, data, created_at, updated_at, initial_message_id, request_hash, snapshot_atespace, snapshot_uri, snapshot_content_scope, history_sequence FROM agent_instance_task
 WHERE context_id = $1 AND id = $2
@@ -150,6 +187,36 @@ type GetAgentInstanceTaskByMessageIDParams struct {
 
 func (q *Queries) GetAgentInstanceTaskByMessageID(ctx context.Context, arg GetAgentInstanceTaskByMessageIDParams) (AgentInstanceTask, error) {
 	row := q.db.QueryRow(ctx, getAgentInstanceTaskByMessageID, arg.ContextID, arg.InitialMessageID)
+	var i AgentInstanceTask
+	err := row.Scan(
+		&i.ContextID,
+		&i.ID,
+		&i.State,
+		&i.StatusTimestamp,
+		&i.Data,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.InitialMessageID,
+		&i.RequestHash,
+		&i.SnapshotAtespace,
+		&i.SnapshotUri,
+		&i.SnapshotContentScope,
+		&i.HistorySequence,
+	)
+	return i, err
+}
+
+const getAgentInstanceTaskForUpdate = `-- name: GetAgentInstanceTaskForUpdate :one
+SELECT context_id, id, state, status_timestamp, data, created_at, updated_at, initial_message_id, request_hash, snapshot_atespace, snapshot_uri, snapshot_content_scope, history_sequence FROM agent_instance_task WHERE context_id = $1 AND id = $2 FOR UPDATE
+`
+
+type GetAgentInstanceTaskForUpdateParams struct {
+	ContextID uuid.UUID
+	ID        string
+}
+
+func (q *Queries) GetAgentInstanceTaskForUpdate(ctx context.Context, arg GetAgentInstanceTaskForUpdateParams) (AgentInstanceTask, error) {
+	row := q.db.QueryRow(ctx, getAgentInstanceTaskForUpdate, arg.ContextID, arg.ID)
 	var i AgentInstanceTask
 	err := row.Scan(
 		&i.ContextID,
@@ -343,73 +410,6 @@ func (q *Queries) ListAgentInstanceTasks(ctx context.Context, arg ListAgentInsta
 		return nil, err
 	}
 	return items, nil
-}
-
-const lockActiveAgentInstanceTask = `-- name: LockActiveAgentInstanceTask :one
-SELECT context_id, id, state, status_timestamp, data, created_at, updated_at, initial_message_id, request_hash, snapshot_atespace, snapshot_uri, snapshot_content_scope, history_sequence FROM agent_instance_task
-WHERE context_id = $1
-  AND state NOT IN (
-      'TASK_STATE_COMPLETED',
-      'TASK_STATE_CANCELED',
-      'TASK_STATE_FAILED',
-      'TASK_STATE_REJECTED',
-      'TASK_STATE_INPUT_REQUIRED',
-      'TASK_STATE_AUTH_REQUIRED'
-  )
-FOR UPDATE
-`
-
-// LockActiveAgentInstanceTask holds the instance's non-terminal task for the
-// rest of the transaction so reclamation cannot overwrite concurrent progress.
-func (q *Queries) LockActiveAgentInstanceTask(ctx context.Context, contextID uuid.UUID) (AgentInstanceTask, error) {
-	row := q.db.QueryRow(ctx, lockActiveAgentInstanceTask, contextID)
-	var i AgentInstanceTask
-	err := row.Scan(
-		&i.ContextID,
-		&i.ID,
-		&i.State,
-		&i.StatusTimestamp,
-		&i.Data,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.InitialMessageID,
-		&i.RequestHash,
-		&i.SnapshotAtespace,
-		&i.SnapshotUri,
-		&i.SnapshotContentScope,
-		&i.HistorySequence,
-	)
-	return i, err
-}
-
-const lockAgentInstanceTask = `-- name: LockAgentInstanceTask :one
-SELECT context_id, id, state, status_timestamp, data, created_at, updated_at, initial_message_id, request_hash, snapshot_atespace, snapshot_uri, snapshot_content_scope, history_sequence FROM agent_instance_task WHERE context_id = $1 AND id = $2 FOR UPDATE
-`
-
-type LockAgentInstanceTaskParams struct {
-	ContextID uuid.UUID
-	ID        string
-}
-
-func (q *Queries) LockAgentInstanceTask(ctx context.Context, arg LockAgentInstanceTaskParams) (AgentInstanceTask, error) {
-	row := q.db.QueryRow(ctx, lockAgentInstanceTask, arg.ContextID, arg.ID)
-	var i AgentInstanceTask
-	err := row.Scan(
-		&i.ContextID,
-		&i.ID,
-		&i.State,
-		&i.StatusTimestamp,
-		&i.Data,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.InitialMessageID,
-		&i.RequestHash,
-		&i.SnapshotAtespace,
-		&i.SnapshotUri,
-		&i.SnapshotContentScope,
-		&i.HistorySequence,
-	)
-	return i, err
 }
 
 const setAgentInstanceTaskSnapshot = `-- name: SetAgentInstanceTaskSnapshot :exec
