@@ -67,7 +67,18 @@ WHERE NOT EXISTS (
 )
 AND NOT EXISTS (
     SELECT 1 FROM agent_instance i WHERE i.prepared_revision = r.revision
+)
+AND NOT EXISTS (
+    SELECT 1 FROM agent_instance_checkpoint c WHERE c.prepared_revision = r.revision
 );
+
+-- Retired pairs no longer retain runtime inputs. Release their historical
+-- success pointers in the same transaction as deletion, preserving RESTRICT
+-- protection for active pairs, instances, and checkpoints.
+-- name: ReleaseRetiredRuntimeRevisionReferences :exec
+UPDATE agent_template_harness_pair
+SET latest_successful_revision = NULL, updated_at = NOW()
+WHERE retired_at IS NOT NULL AND latest_successful_revision = $1;
 
 -- name: DeleteUnreferencedRuntimeRevision :exec
 DELETE FROM runtime_revision r
@@ -79,4 +90,7 @@ WHERE r.revision = $1
   )
   AND NOT EXISTS (
       SELECT 1 FROM agent_instance i WHERE i.prepared_revision = r.revision
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM agent_instance_checkpoint c WHERE c.prepared_revision = r.revision
   );

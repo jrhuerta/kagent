@@ -20,6 +20,9 @@ WHERE r.revision = $1
   AND NOT EXISTS (
       SELECT 1 FROM agent_instance i WHERE i.prepared_revision = r.revision
   )
+  AND NOT EXISTS (
+      SELECT 1 FROM agent_instance_checkpoint c WHERE c.prepared_revision = r.revision
+  )
 `
 
 func (q *Queries) DeleteUnreferencedRuntimeRevision(ctx context.Context, revision string) error {
@@ -100,6 +103,9 @@ WHERE NOT EXISTS (
 AND NOT EXISTS (
     SELECT 1 FROM agent_instance i WHERE i.prepared_revision = r.revision
 )
+AND NOT EXISTS (
+    SELECT 1 FROM agent_instance_checkpoint c WHERE c.prepared_revision = r.revision
+)
 `
 
 func (q *Queries) ListUnreferencedRuntimeRevisions(ctx context.Context) ([]RuntimeRevision, error) {
@@ -161,6 +167,20 @@ func (q *Queries) MarkRuntimeRevisionSuccessful(ctx context.Context, arg MarkRun
 		arg.AgentTemplateUid,
 		arg.HarnessUid,
 	)
+	return err
+}
+
+const releaseRetiredRuntimeRevisionReferences = `-- name: ReleaseRetiredRuntimeRevisionReferences :exec
+UPDATE agent_template_harness_pair
+SET latest_successful_revision = NULL, updated_at = NOW()
+WHERE retired_at IS NOT NULL AND latest_successful_revision = $1
+`
+
+// Retired pairs no longer retain runtime inputs. Release their historical
+// success pointers in the same transaction as deletion, preserving RESTRICT
+// protection for active pairs, instances, and checkpoints.
+func (q *Queries) ReleaseRetiredRuntimeRevisionReferences(ctx context.Context, latestSuccessfulRevision *string) error {
+	_, err := q.db.Exec(ctx, releaseRetiredRuntimeRevisionReferences, latestSuccessfulRevision)
 	return err
 }
 

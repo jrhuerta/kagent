@@ -72,11 +72,21 @@ func (c *Client) UpsertAgentTemplateHarnessPair(ctx context.Context, pair AgentT
 	if err != nil {
 		return fmt.Errorf("marshal AgentTemplate labels: %w", err)
 	}
-	return c.q.UpsertAgentTemplateHarnessPair(ctx, dbgen.UpsertAgentTemplateHarnessPairParams{
-		Namespace: pair.Namespace, AgentTemplateName: pair.AgentTemplateName,
-		AgentTemplateUid: pair.AgentTemplateUID, HarnessName: pair.HarnessName,
-		HarnessUid: pair.HarnessUID, DesiredRevision: pair.DesiredRevision,
-		AgentTemplateLabels: labels,
+	// Retire previous identities at this name and reactivate the current UID
+	// atomically. Instance creation must never observe the current pair retired
+	// during an otherwise unchanged reconciliation.
+	return c.withTx(ctx, func(q *dbgen.Queries) error {
+		if err := q.RetireAgentTemplateHarnessPair(ctx, dbgen.RetireAgentTemplateHarnessPairParams{
+			Namespace: pair.Namespace, AgentTemplateName: pair.AgentTemplateName, HarnessName: pair.HarnessName,
+		}); err != nil {
+			return fmt.Errorf("retire replaced AgentTemplate/Harness pair: %w", err)
+		}
+		return q.UpsertAgentTemplateHarnessPair(ctx, dbgen.UpsertAgentTemplateHarnessPairParams{
+			Namespace: pair.Namespace, AgentTemplateName: pair.AgentTemplateName,
+			AgentTemplateUid: pair.AgentTemplateUID, HarnessName: pair.HarnessName,
+			HarnessUid: pair.HarnessUID, DesiredRevision: pair.DesiredRevision,
+			AgentTemplateLabels: labels,
+		})
 	})
 }
 
@@ -180,7 +190,12 @@ func (c *Client) ListUnreferencedRuntimeRevisions(ctx context.Context) ([]Runtim
 }
 
 func (c *Client) DeleteUnreferencedRuntimeRevision(ctx context.Context, revision string) error {
-	return c.q.DeleteUnreferencedRuntimeRevision(ctx, revision)
+	return c.withTx(ctx, func(q *dbgen.Queries) error {
+		if err := q.ReleaseRetiredRuntimeRevisionReferences(ctx, &revision); err != nil {
+			return fmt.Errorf("release retired runtime revision references: %w", err)
+		}
+		return q.DeleteUnreferencedRuntimeRevision(ctx, revision)
+	})
 }
 
 // ── AgentInstances ───────────────────────────────────────────────────────────

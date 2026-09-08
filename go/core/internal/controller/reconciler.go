@@ -251,12 +251,10 @@ func (r *Reconciler) reconcilePair(ctx context.Context, key string) error {
 		}
 		return r.cleanupUnreferencedRevisions(ctx)
 	}
-	// Retire every historical identity at this stable name. The upsert below
-	// immediately reactivates the exact current UID pair.
-	if err := r.store.RetireAgentTemplateHarnessPair(ctx, state.Pair.AgentTemplate.Namespace, state.Pair.AgentTemplate.Name, state.Pair.Harness.Name); err != nil {
-		return fmt.Errorf("retire replaced AgentTemplate/Harness pair %s: %w", key, err)
-	}
 	if state.Revision == nil || state.RevisionID.IsZero() {
+		if err := r.store.RetireAgentTemplateHarnessPair(ctx, state.Pair.AgentTemplate.Namespace, state.Pair.AgentTemplate.Name, state.Pair.Harness.Name); err != nil {
+			return fmt.Errorf("retire invalid AgentTemplate/Harness pair %s: %w", key, err)
+		}
 		return r.cleanupUnreferencedRevisions(ctx)
 	}
 	pair := database.AgentTemplateHarnessPair{
@@ -287,8 +285,8 @@ func (r *Reconciler) reconcilePair(ctx context.Context, key string) error {
 	if err != nil {
 		return fmt.Errorf("reconcile ActorTemplate %s/%s: %w", desiredRef.GetAtespace(), desiredRef.GetName(), err)
 	}
-	r.collections.ActorTemplates.ConditionalUpdateObject(ObservedActorTemplate{Template: observed})
 	if !substrate.ActorTemplateSpecEqual(observed, state.DesiredActorTemplate) {
+		r.collections.ActorTemplates.ConditionalUpdateObject(ObservedActorTemplate{Template: observed})
 		return nil
 	}
 
@@ -302,10 +300,16 @@ func (r *Reconciler) reconcilePair(ctx context.Context, key string) error {
 	if err := r.store.UpsertRuntimeRevision(ctx, revision); err != nil {
 		return fmt.Errorf("store runtime revision %s: %w", state.RevisionID, err)
 	}
-	if observed.GetStatus().GetGoldenSnapshotStatus().GetGoldenSnapshot() != nil {
+	ready := observed.GetStatus().GetGoldenSnapshotStatus().GetGoldenSnapshot() != nil
+	if ready {
 		if err := r.store.MarkRuntimeRevisionSuccessful(ctx, pair); err != nil {
 			return fmt.Errorf("mark runtime revision %s successful: %w", state.RevisionID, err)
 		}
+	}
+	// This observation drives Kubernetes Ready status on a separate queue.
+	// Publish it only after instance creation can select the persisted revision.
+	r.collections.ActorTemplates.ConditionalUpdateObject(ObservedActorTemplate{Template: observed})
+	if ready {
 		return r.cleanupUnreferencedRevisions(ctx)
 	}
 	return nil
@@ -346,7 +350,7 @@ func (r *Reconciler) reconcileModelConfigStatus(ctx context.Context, key string)
 }
 
 // cleanupUnreferencedRevisions removes immutable ActorTemplates after their
-// final pair or AgentInstance database reference has been released.
+// final pair, AgentInstance, or checkpoint database reference has been released.
 func (r *Reconciler) cleanupUnreferencedRevisions(ctx context.Context) error {
 	revisions, err := r.store.ListUnreferencedRuntimeRevisions(ctx)
 	if err != nil {
